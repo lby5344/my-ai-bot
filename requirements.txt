@@ -1,6 +1,6 @@
 streamlit
 ccxt
 pandas
-pandas_ta
+pandas-ta
 scikit-learn
 plotly
