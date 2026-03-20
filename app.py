@@ -27,7 +27,7 @@ st.markdown("""
 def get_ai_briefing(df, up, down):
     try:
         # 모델 설정 (gemini-1.5-flash가 더 빠르고 안정적일 수 있습니다)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
         latest = df.iloc[-1]
         
         prompt = f"""
