@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 import google.generativeai as genai  # 추가: 제미나이 라이브러리
 
 # 0. 제미나이 AI 설정 (본인의 API 키를 입력하세요)
-GEMINI_API_KEY =AIzaSyAHAVKoOWAkF_TeJ0DP-tYX_BlkTQUPgaA
+GEMINI_API_KEY = AIzaSyDxWi6FPNI1UZLpHHFGz9Iquqjcsxbbfps
 genai.configure(api_key=GEMINI_API_KEY)
 
 # 1. 페이지 설정 및 폰트 스타일
