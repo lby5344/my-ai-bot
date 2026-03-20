@@ -8,7 +8,7 @@ from plotly.subplots import make_subplots
 import google.generativeai as genai
 
 # [중요] 트레이더님이 주신 키를 직접 입력했습니다.
-GEMINI_API_KEY = "AIzaSyDxWi6FPNI1UZLpHHFGz9Iquqjcsxbbfps".strip()
+GEMINI_API_KEY = "AIzaSyApXMqq1zw-7GHXjg_z8kVCd0y7QbweDoA".strip()
 genai.configure(api_key=GEMINI_API_KEY)
 
 # 1. 페이지 설정
@@ -26,23 +26,30 @@ st.markdown("""
 # AI 시황 분석 함수 (오류 방지 강화)
 def get_ai_briefing(df, up, down):
     try:
-        # 모델 설정 (gemini-1.5-flash가 더 빠르고 안정적일 수 있습니다)
-        model = genai.GenerativeModel('gemini-pro')
-        latest = df.iloc[-1]
+        # 모델명을 'models/gemini-1.5-flash' 또는 'models/gemini-pro'로 풀네임 작성
+        # 이렇게 하면 v1beta 환경에서도 경로를 정확히 찾아갑니다.
+        model = genai.GenerativeModel('models/gemini-1.5-flash') 
         
+        latest = df.iloc[-1]
         prompt = f"""
-        당신은 암호화폐 전문 분석가 'AI 참모'입니다. 아래 데이터를 바탕으로 비트코인 시황을 분석하세요.
+        당신은 암호화폐 전문 분석가 'AI 참모'입니다.
         - 현재가: ${latest['Close']:,.1f}
         - AI 예측: 상승 {up:.1f}%, 하락 {down:.1f}%
         - RSI_DK: {latest['RSI_DK']:.1f}
         - 4H 추세: {'BULL' if latest.get('Trend_4H', 0) == 1 else 'BEAR'}
         
-        요구사항: 전문가답게 딱 3줄로 핵심 전략(진입/관망/익절)을 제시할 것.
+        전문가답게 딱 3줄로 현재 상황과 전략을 요약하세요.
         """
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"AI 분석 중 일시적 오류가 발생했습니다. (사유: {str(e)})"
+        # 만약 또 안되면 gemini-pro로 한 번 더 시도하는 예외 처리 추가
+        try:
+            model = genai.GenerativeModel('models/gemini-pro')
+            response = model.generate_content(prompt)
+            return response.text
+        except:
+            return f"🤖 AI가 아직 깨어나는 중입니다. (오류: {str(e)})"
 
 # 2. 지표 계산기 (V6)
 def add_indicators_v6(df, mtf_df=None):
