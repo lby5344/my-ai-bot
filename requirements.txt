@@ -4,4 +4,3 @@ pandas
 numpy
 scikit-learn
 plotly
-google-generativeai==0.3.1
