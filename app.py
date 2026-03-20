@@ -26,31 +26,35 @@ st.markdown("""
 # AI 시황 분석 함수 (오류 방지 강화)
 def get_ai_briefing(df, up, down):
     try:
-        # 모델명을 'models/gemini-1.5-flash' 또는 'models/gemini-pro'로 풀네임 작성
-        # 이렇게 하면 v1beta 환경에서도 경로를 정확히 찾아갑니다.
-        model = genai.GenerativeModel('models/gemini-1.5-flash') 
+        # 1. 가능한 모든 모델 후보 리스트
+        model_candidates = [
+            'gemini-1.5-flash', 
+            'gemini-1.0-pro', 
+            'gemini-pro', 
+            'models/gemini-1.5-flash', 
+            'models/gemini-pro'
+        ]
         
         latest = df.iloc[-1]
         prompt = f"""
         당신은 암호화폐 전문 분석가 'AI 참모'입니다.
-        - 현재가: ${latest['Close']:,.1f}
-        - AI 예측: 상승 {up:.1f}%, 하락 {down:.1f}%
-        - RSI_DK: {latest['RSI_DK']:.1f}
-        - 4H 추세: {'BULL' if latest.get('Trend_4H', 0) == 1 else 'BEAR'}
-        
-        전문가답게 딱 3줄로 현재 상황과 전략을 요약하세요.
+        비트코인 상황: ${latest['Close']:,.1f}, 상승확률 {up:.1f}%.
+        3줄 요약 전략을 제시하세요.
         """
-        response = model.generate_content(prompt)
-        return response.text
+        
+        # 2. 모델 리스트를 하나씩 돌려가며 성공할 때까지 시도
+        for model_name in model_candidates:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                if response:
+                    return f"(사용모델: {model_name})\n\n{response.text}"
+            except:
+                continue # 실패하면 다음 모델로 패스
+                
+        return "🤖 사용 가능한 AI 모델을 찾지 못했습니다. (서버 업데이트 대기 중)"
     except Exception as e:
-        # 만약 또 안되면 gemini-pro로 한 번 더 시도하는 예외 처리 추가
-        try:
-            model = genai.GenerativeModel('models/gemini-pro')
-            response = model.generate_content(prompt)
-            return response.text
-        except:
-            return f"🤖 AI가 아직 깨어나는 중입니다. (오류: {str(e)})"
-
+        return f"🤖 긴급 점검 중... (사유: {str(e)})"
 # 2. 지표 계산기 (V6)
 def add_indicators_v6(df, mtf_df=None):
     # RSI_DK 및 기본 지표
