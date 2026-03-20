@@ -26,35 +26,39 @@ st.markdown("""
 # AI 시황 분석 함수 (오류 방지 강화)
 def get_ai_briefing(df, up, down):
     try:
-        # 1. 가능한 모든 모델 후보 리스트
-        model_candidates = [
-            'gemini-1.5-flash', 
-            'gemini-1.0-pro', 
-            'gemini-pro', 
-            'models/gemini-1.5-flash', 
-            'models/gemini-pro'
-        ]
+        # 이미 성공 확인된 모델명을 우선 순위로 배치
+        model_candidates = ['gemini-1.5-flash', 'gemini-pro']
         
         latest = df.iloc[-1]
         prompt = f"""
-        당신은 암호화폐 전문 분석가 'AI 참모'입니다.
-        비트코인 상황: ${latest['Close']:,.1f}, 상승확률 {up:.1f}%.
+        당신은 암호화폐 전문 분석가 'AI 참모'입니다. 
+        비트코인 ${latest['Close']:,.1f}, 상승확력 {up:.1f}%.
         3줄 요약 전략을 제시하세요.
         """
         
-        # 2. 모델 리스트를 하나씩 돌려가며 성공할 때까지 시도
         for model_name in model_candidates:
             try:
                 model = genai.GenerativeModel(model_name)
-                response = model.generate_content(prompt)
-                if response:
-                    return f"(사용모델: {model_name})\n\n{response.text}"
-            except:
-                continue # 실패하면 다음 모델로 패스
+                # 안전성 설정을 해제하여 답변 거부를 방지합니다.
+                response = model.generate_content(prompt, safety_settings=[
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                ])
                 
-        return "🤖 사용 가능한 AI 모델을 찾지 못했습니다. (서버 업데이트 대기 중)"
+                # [수정 포인트] response.text가 있는지 철저히 확인
+                if response and hasattr(response, 'text') and response.text:
+                    return f"({model_name} 분석 완료)\n\n{response.text}"
+                elif response and response.candidates:
+                    # text 속성이 없을 경우 첫 번째 후보의 파츠를 가져옴
+                    return response.candidates[0].content.parts[0].text
+            except:
+                continue
+                
+        return "🤖 AI 참모가 응답을 생성했으나 내용을 읽을 수 없습니다."
     except Exception as e:
-        return f"🤖 긴급 점검 중... (사유: {str(e)})"
+        return f"🤖 시스템 오류: {str(e)}"
 # 2. 지표 계산기 (V6)
 def add_indicators_v6(df, mtf_df=None):
     # RSI_DK 및 기본 지표
