@@ -131,9 +131,14 @@ def get_analysis_data(tf):
 def create_trading_chart(df, tf_name):
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
     
-    bColor = np.where(df['Close'] >= df['Open'], '#00ffbb', '#ff0055')
-    fig.add_trace(go.Candlestick(x=df['Date'], open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Clean Candle', marker=dict(color=bColor), line=dict(color=bColor)), row=1, col=1)
+    # [수정된 부분] Plotly 전용 양봉(increasing)/음봉(decreasing) 색상 지정 방식 사용
+    fig.add_trace(go.Candlestick(
+        x=df['Date'], open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], 
+        name='Clean Candle', 
+        increasing_line_color='#00ffbb', decreasing_line_color='#ff0055'
+    ), row=1, col=1)
     
+    # 🧲 v6 성벽 라인 (계단식)
     fig.add_trace(go.Scatter(x=df['Date'], y=df['Fortress_Price'], line=dict(color='#ffaa00', width=2, shape='hv'), name='🧲 성벽 라인'), row=1, col=1)
     
     # 시각화용 River 밴드
@@ -144,6 +149,7 @@ def create_trading_chart(df, tf_name):
     fig.add_trace(go.Scatter(x=df['Date'], y=df['river_upper'], line=dict(color='rgba(0,180,0,0.0)'), showlegend=False), row=1, col=1)
     fig.add_trace(go.Scatter(x=df['Date'], y=df['river_lower'], fill='tonexty', fillcolor='rgba(0,180,0,0.1)', line=dict(color='rgba(0,180,0,0.0)'), name='River 구역'), row=1, col=1)
     
+    # RSI_DK
     fig.add_trace(go.Scatter(x=df['Date'], y=df['RSI_DK'], name='RSI_DK', line=dict(color='#00e676', width=1)), row=2, col=1)
     fig.add_hrect(y0=80, y1=100, fillcolor="rgba(0,128,0,0.1)", line_width=0, row=2, col=1)
     fig.add_hrect(y0=0, y1=20, fillcolor="rgba(255,0,0,0.1)", line_width=0, row=2, col=1)
