@@ -5,15 +5,14 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import requests 
+import requests
+from datetime import datetime, timedelta  # 🕒 시간 관련 기능 추가
 
-# [수정된 부분] 깃허브에 키를 노출하지 않고, 스트림릿 금고에서 가져옵니다!
+# 1. 스트림릿 금고에서 API 키 불러오기
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
 # 2. 페이지 설정
 st.set_page_config(page_title="AI 참모 v2.5 (Clean River v6)", page_icon="🧲", layout="wide")
-
-# ... (아래 코드는 방금 전과 동일하게 그대로 두시면 됩니다!) ...
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Nanum+Gothic:wght@400;700&display=swap');
@@ -22,25 +21,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. [핵심] 직통망(REST API) AI 브리핑 함수
 # 3. [핵심] 사용 가능한 AI 모델을 자동 검색해서 쏘는 브리핑 함수
 def get_safe_ai_briefing(df, up, down):
     try:
-        # 1단계: 구글 서버에 "지금 사용 가능한 모델 명단 다 내놔"라고 요청
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
         list_response = requests.get(list_url).json()
         
         valid_model = None
-        # 명단에서 글쓰기(generateContent)가 가능한 놈을 색출
         if 'models' in list_response:
             for m in list_response['models']:
                 if 'supportedGenerationMethods' in m and 'generateContent' in m['supportedGenerationMethods']:
-                    # flash나 pro라는 이름이 들어간 놈을 최우선으로 스카웃
                     if 'flash' in m['name'] or 'pro' in m['name']:
                         valid_model = m['name']
                         break
-            
-            # 만약 flash나 pro가 없으면, 그냥 글 쓸 줄 아는 아무 모델이나 멱살 잡고 끌고 옴
             if not valid_model:
                 for m in list_response['models']:
                     if 'supportedGenerationMethods' in m and 'generateContent' in m['supportedGenerationMethods']:
@@ -48,9 +41,8 @@ def get_safe_ai_briefing(df, up, down):
                         break
                         
         if not valid_model:
-            return f"🤖 구글 서버에 글쓰기 가능한 AI가 출근하지 않았습니다. (명단: {list_response})"
+            return f"🤖 구글 서버에 글쓰기 가능한 AI가 출근하지 않았습니다."
 
-        # 2단계: 색출해낸 모델(valid_model)에게 바로 차트 분석 지시
         latest = df.iloc[-1]
         prompt = f"""
         당신은 암호화폐 전문 분석가 'AI 참모'입니다.
@@ -60,7 +52,6 @@ def get_safe_ai_briefing(df, up, down):
         위 데이터를 바탕으로 현재 시장 상황과 투자 전략(진입/관망/익절)을 딱 3줄로 명확하게 브리핑하세요.
         """
         
-        # 찾은 모델 이름으로 주소 자동 세팅
         url = f"https://generativelanguage.googleapis.com/v1beta/{valid_model}:generateContent?key={GEMINI_API_KEY}"
         headers = {'Content-Type': 'application/json'}
         data = {
@@ -75,7 +66,6 @@ def get_safe_ai_briefing(df, up, down):
         
         response = requests.post(url, headers=headers, json=data).json()
         
-        # 3단계: 대답 확인
         if 'candidates' in response and len(response['candidates']) > 0:
             ai_text = response['candidates'][0]['content']['parts'][0]['text']
             return f"(자동 선택된 모델: {valid_model})\n\n{ai_text}"
@@ -86,6 +76,7 @@ def get_safe_ai_briefing(df, up, down):
             
     except Exception as e:
         return f"🤖 통신망 오류 발생: {str(e)}"
+
 # 4. 지표 계산기 (Clean River v6)
 def add_indicators_v6(df, mtf_df=None):
     rsiLen = 14
@@ -156,6 +147,12 @@ if sel_tf:
         df, latest, up, down = get_analysis_data(sel_tf)
         
         st.write("---")
+        
+        # 🕒 [신규 추가] 한국 시간(KST) 계산 및 표시
+        now_kst = datetime.utcnow() + timedelta(hours=9)
+        current_time_str = now_kst.strftime("%Y년 %m월 %d일 %H시 %M분 %S초")
+        st.caption(f"🕒 **업데이트 시간 (KST):** {current_time_str}")
+        
         m1, m2, m3 = st.columns(3)
         m1.metric("현재 BTC 가격", f"${latest['Close']:,.1f}")
         m2.metric("상승 확률 (LONG)", f"{up:.1f}%")
