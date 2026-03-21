@@ -5,14 +5,15 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import requests # 구글 패키지 대신 직통 통신망 사용
-import json
+import requests 
 
-# 1. 제미나이 API 키 (마누라님의 키)
-GEMINI_API_KEY = "AIzaSyApXMqq1zw-7GHXjg_z8kVCd0y7QbweDoA".strip()
+# [수정된 부분] 깃허브에 키를 노출하지 않고, 스트림릿 금고에서 가져옵니다!
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
 # 2. 페이지 설정
 st.set_page_config(page_title="AI 참모 v2.5 (Clean River v6)", page_icon="🧲", layout="wide")
+
+# ... (아래 코드는 방금 전과 동일하게 그대로 두시면 됩니다!) ...
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Nanum+Gothic:wght@400;700&display=swap');
