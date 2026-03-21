@@ -5,13 +5,13 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import google.generativeai as genai
+import requests # 구글 패키지 대신 직통 통신망 사용
+import json
 
-# 1. 제미나이 AI 설정 (마누라님의 새 API 키 적용)
+# 1. 제미나이 API 키 (마누라님의 키)
 GEMINI_API_KEY = "AIzaSyApXMqq1zw-7GHXjg_z8kVCd0y7QbweDoA".strip()
-genai.configure(api_key=GEMINI_API_KEY)
 
-# 2. 페이지 및 폰트 설정
+# 2. 페이지 설정
 st.set_page_config(page_title="AI 참모 v2.5 (Clean River v6)", page_icon="🧲", layout="wide")
 st.markdown("""
 <style>
@@ -21,10 +21,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. 방탄 AI 브리핑 함수 (에러가 나도 앱이 죽지 않음)
+# 3. [핵심] 직통망(REST API) AI 브리핑 함수
 def get_safe_ai_briefing(df, up, down):
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
         latest = df.iloc[-1]
         
         prompt = f"""
@@ -35,34 +34,45 @@ def get_safe_ai_briefing(df, up, down):
         위 데이터를 바탕으로 현재 시장 상황과 투자 전략(진입/관망/익절)을 딱 3줄로 명확하게 브리핑하세요.
         """
         
-        # 구글의 안전성 검열 때문에 답변이 짤리는 현상 방지
-        safe_config = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
+        # 구글 서버로 직접 쏘는 직통 주소
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        headers = {'Content-Type': 'application/json'}
+        data = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+            ]
+        }
         
-        response = model.generate_content(prompt, safety_settings=safe_config)
+        # 인터넷으로 직접 요청 보내기
+        response = requests.post(url, headers=headers, json=data)
+        result = response.json()
         
-        if response and response.text:
-            return response.text
+        # 응답 까보기
+        if 'candidates' in result and len(result['candidates']) > 0:
+            return result['candidates'][0]['content']['parts'][0]['text']
+        elif 'error' in result:
+            return f"구글 서버에서 거절했습니다. 사유: {result['error']['message']}"
         else:
-            return "현재 차트 데이터를 분석 중입니다. (일시적인 텍스트 생성 지연)"
+            return f"알 수 없는 응답: {result}"
             
     except Exception as e:
-        return f"구글 AI 서버와 연결 대기 중입니다... (사유: {str(e)[:50]}...)\n*참고: AI 브리핑 외에 차트와 확률 계산은 정상 작동합니다!*"
+        return f"인터넷 연결 오류: {str(e)}"
 
 # 4. 지표 계산기 (Clean River v6)
 def add_indicators_v6(df, mtf_df=None):
     rsiLen = 14
     df['lo'] = df['Low'].rolling(window=rsiLen).min()
     df['hi'] = df['High'].rolling(window=rsiLen).max()
-    df['RSI_DK'] = np.where((df['hi'] - df['lo']) == 0, 50, (df['Close'] - df['lo']) / (df['hi'] - df['lo']) * 100)
+    denom = df['hi'] - df['lo']
+    df['RSI_DK'] = np.where(denom == 0, 50, (df['Close'] - df['lo']) / denom * 100)
     
-    ema12 = df['Close'].ewm(span=12).mean()
-    ema26 = df['Close'].ewm(span=26).mean()
-    df['River_Smoothed'] = (ema12 - ema26).ewm(span=5).mean()
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['River_Smoothed'] = (ema12 - ema26).ewm(span=5, adjust=False).mean()
     df['River_Slope'] = df['River_Smoothed'].diff()
     df['River_Accel'] = df['River_Slope'].diff()
     
@@ -77,23 +87,24 @@ def add_indicators_v6(df, mtf_df=None):
     df['Fortress_Price'] = fortress
     
     if mtf_df is not None:
-        mtf_df['is4hBull'] = (mtf_df['Close'].ewm(span=12).mean() - mtf_df['Close'].ewm(span=26).mean() >= 0).astype(int)
+        ema12_4 = mtf_df['Close'].ewm(span=12, adjust=False).mean()
+        ema26_4 = mtf_df['Close'].ewm(span=26, adjust=False).mean()
+        mtf_df['River_4H'] = (ema12_4 - ema26_4).ewm(span=5, adjust=False).mean()
+        mtf_df['is4hBull'] = (mtf_df['River_4H'] >= 0).astype(int)
         mtf_merge = mtf_df[['Date', 'is4hBull']].rename(columns={'Date':'Date_4H', 'is4hBull':'Trend_4H'})
         df = pd.merge_asof(df.sort_values('Date'), mtf_merge.sort_values('Date_4H'), left_on='Date', right_on='Date_4H', direction='backward')
     return df
 
 @st.cache_data(ttl=60)
 def get_analysis_data(tf):
-    # 크라켄(Kraken) 거래소로 복구하여 IP 차단 문제 우회
     ex = ccxt.kraken() 
-    ohlcv = ex.fetch_ohlcv('BTC/USDT', timeframe=tf, limit=200)
-    df = pd.DataFrame(ohlcv, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+    df = pd.DataFrame(ex.fetch_ohlcv('BTC/USDT', timeframe=tf, limit=200), columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
     df['Date'] = pd.to_datetime(df['Date'], unit='ms') + pd.Timedelta(hours=9)
     
-    ohlcv_4h = ex.fetch_ohlcv('BTC/USDT', timeframe='4h', limit=100)
-    df_4h = pd.DataFrame(ohlcv_4h, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+    df_4h = pd.DataFrame(ex.fetch_ohlcv('BTC/USDT', timeframe='4h', limit=100), columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
     df_4h['Date'] = pd.to_datetime(df_4h['Date'], unit='ms') + pd.Timedelta(hours=9)
     
+    df_4h = add_indicators_v6(df_4h)
     df = add_indicators_v6(df, df_4h)
     
     df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
@@ -131,7 +142,7 @@ if sel_tf:
         st.info(f"🤖 **제미나이 AI 실시간 브리핑**\n\n{ai_msg}")
         
         # 차트 그리기
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05)
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
         fig.add_trace(go.Candlestick(x=df['Date'], open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='BTC', increasing_line_color='#00ffbb', decreasing_line_color='#ff0055'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df['Date'], y=df['Fortress_Price'], line=dict(color='#ffaa00', width=2, shape='hv'), name='🧲 성벽 라인'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df['Date'], y=df['RSI_DK'], name='RSI_DK', line=dict(color='#00e676')), row=2, col=1)
