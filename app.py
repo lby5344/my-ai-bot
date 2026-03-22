@@ -1,20 +1,19 @@
+import os
 import streamlit as st
 import ccxt
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import requests
 from datetime import datetime, timedelta
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import load_model
-import os
+from groq import Groq  # <-- 그록 참모 소환!
 
-# [수정] 이지패널 Environment 탭에 넣은 키를 가져옵니다. 
-# 만약 설정 안 하셨다면 'st.secrets' 대신 'os.getenv'를 씁니다.
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# [설정] 이지패널 Environment 탭에 GROQ_API_KEY를 꼭 넣어주세요!
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-st.set_page_config(page_title="AI 참모 v3.0 (LSTM 딥러닝 탑재)", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="AI 참모 v3.0 (LSTM + Groq 엔진)", page_icon="🧠", layout="wide")
 
 # 폰트 및 스타일 설정
 st.markdown("""
@@ -37,12 +36,16 @@ def load_ai_brain():
             return None
     return None
 
+# 🤖 [수정] 구글 대신 그록(Groq)을 사용하는 브리핑 함수
 def get_safe_ai_briefing(df, up, down):
-    if not GEMINI_API_KEY:
-        return "🤖 API 키가 설정되지 않았습니다. 이지패널 Environment 설정을 확인하세요."
+    if not GROQ_API_KEY:
+        return "🤖 Groq API 키가 설정되지 않았습니다. 이지패널 Environment 설정을 확인하세요."
     
     try:
+        client = Groq(api_key=GROQ_API_KEY)
         latest = df.iloc[-1]
+        
+        # 참모에게 전달할 데이터 정리
         prompt = f"""
         당신은 암호화폐 전문 분석가 'AI 참모'입니다.
         - 현재 비트코인 가격: ${latest['Close']:,.1f}
@@ -51,20 +54,18 @@ def get_safe_ai_briefing(df, up, down):
         위 데이터를 바탕으로 현재 시장 상황과 투자 전략을 딱 3줄로 명확하게 브리핑하세요.
         """
         
-        # 최신 모델인 gemini-1.5-flash를 기본으로 사용합니다.
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        headers = {'Content-Type': 'application/json'}
-        data = {"contents": [{"parts": [{"text": prompt}]}]}
-        
-        response = requests.post(url, headers=headers, json=data).json()
-        
-        if 'candidates' in response:
-            return response['candidates'][0]['content']['parts'][0]['text']
-        else:
-            return "🤖 구글 API가 응답하지 않습니다. (키가 만료되었거나 정지되었을 수 있음)"
+        # 그록의 가장 똑똑한 Llama 3.3 모델 사용 (속도가 예술입니다!)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "너는 유능한 암호화폐 투자 전략가야. 한국어로 짧고 명확하게 핵심만 말해줘."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response.choices[0].message.content
             
     except Exception as e:
-        return f"🤖 브리핑 오류: {str(e)}"
+        return f"🤖 그록 브리핑 오류: {str(e)}"
 
 # 보조지표 계산 함수 (마누라님 전용 로직)
 def add_indicators_v6(df):
@@ -102,7 +103,6 @@ def get_analysis_data(tf):
     lstm_model = load_ai_brain()
     if lstm_model is not None:
         features = ['Close', 'RSI_DK', 'River_Slope', 'River_Accel']
-        # 모델 학습시 사용했던 것과 동일한 스케일링 필요
         data = df_c[features].values
         scaler = MinMaxScaler(feature_range=(0, 1))
         scaled_data = scaler.fit_transform(data)
@@ -122,7 +122,7 @@ def get_analysis_data(tf):
     return df, df_c.iloc[-1], up_prob, down_prob
 
 # 메인 UI
-st.title("🧠 AI 참모 v3.0 (LSTM 딥러닝 탑재)")
+st.title("🧠 AI 참모 v3.0 (LSTM + Groq 엔진)")
 st.write("---")
 
 col1, col2, col3 = st.columns(3)
@@ -132,7 +132,7 @@ if col2.button("🔄 4시간 분석"): sel_tf = "4h"
 if col3.button("🔄 1일 분석"): sel_tf = "1d"
 
 if sel_tf:
-    with st.spinner('LSTM 딥러닝이 차트의 흐름을 분석 중입니다...'):
+    with st.spinner('LSTM 딥러닝과 Groq 참모가 차트를 분석 중입니다...'):
         df, latest, up, down = get_analysis_data(sel_tf)
         
         st.write("---")
@@ -141,8 +141,9 @@ if sel_tf:
         m2.metric("상승 확률", f"{up:.1f}%")
         m3.metric("하락 확률", f"{down:.1f}%")
         
+        # [실행] 그록 브리핑 호출!
         ai_msg = get_safe_ai_briefing(df, up, down)
-        st.info(f"🤖 **실시간 브리핑**\n\n{ai_msg}")
+        st.info(f"🤖 **실시간 브리핑 (Powered by Groq)**\n\n{ai_msg}")
         
         # 차트 그리기
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
