@@ -2,83 +2,72 @@ import streamlit as st
 import ccxt
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
-from datetime import datetime, timedelta  # 🕒 시간 관련 기능 추가
+from datetime import datetime, timedelta
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import load_model
+import os
 
-# 1. 스트림릿 금고에서 API 키 불러오기
-GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+# [수정] 이지패널 Environment 탭에 넣은 키를 가져옵니다. 
+# 만약 설정 안 하셨다면 'st.secrets' 대신 'os.getenv'를 씁니다.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# 2. 페이지 설정
-st.set_page_config(page_title="AI 참모 v2.5 (Clean River v6)", page_icon="🧲", layout="wide")
+st.set_page_config(page_title="AI 참모 v3.0 (LSTM 딥러닝 탑재)", page_icon="🧠", layout="wide")
+
+# 폰트 및 스타일 설정
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Nanum+Gothic:wght@400;700&display=swap');
     html, body, [data-testid="stSidebar"], p, h1, h2, h3, h4, div { font-family: 'Nanum Gothic', sans-serif !important; }
-    div[data-testid="stMetricValue"] { font-size: 2.5rem; font-weight: 700; color: #00ffbb; }
+    div[data-testid="stMetricValue"] { font-size: 2.5rem; font-weight: 700; color: #ff00ff; }
 </style>
 """, unsafe_allow_html=True)
 
-# 3. [핵심] 사용 가능한 AI 모델을 자동 검색해서 쏘는 브리핑 함수
-def get_safe_ai_briefing(df, up, down):
-    try:
-        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-        list_response = requests.get(list_url).json()
-        
-        valid_model = None
-        if 'models' in list_response:
-            for m in list_response['models']:
-                if 'supportedGenerationMethods' in m and 'generateContent' in m['supportedGenerationMethods']:
-                    if 'flash' in m['name'] or 'pro' in m['name']:
-                        valid_model = m['name']
-                        break
-            if not valid_model:
-                for m in list_response['models']:
-                    if 'supportedGenerationMethods' in m and 'generateContent' in m['supportedGenerationMethods']:
-                        valid_model = m['name']
-                        break
-                        
-        if not valid_model:
-            return f"🤖 구글 서버에 글쓰기 가능한 AI가 출근하지 않았습니다."
+# 🧠 [신규] 딥러닝 모델 불러오기
+@st.cache_resource
+def load_ai_brain():
+    model_path = 'ai_trader_lstm.h5' # 깃허브에 이 파일이 있어야 합니다!
+    if os.path.exists(model_path):
+        try:
+            return load_model(model_path)
+        except Exception as e:
+            st.error(f"모델 로딩 실패: {e}")
+            return None
+    return None
 
+def get_safe_ai_briefing(df, up, down):
+    if not GEMINI_API_KEY:
+        return "🤖 API 키가 설정되지 않았습니다. 이지패널 Environment 설정을 확인하세요."
+    
+    try:
         latest = df.iloc[-1]
         prompt = f"""
         당신은 암호화폐 전문 분석가 'AI 참모'입니다.
         - 현재 비트코인 가격: ${latest['Close']:,.1f}
-        - AI 예측: 상승 확률 {up:.1f}%, 하락 확률 {down:.1f}%
+        - 딥러닝(LSTM) 예측: 상승 확률 {up:.1f}%, 하락 확률 {down:.1f}%
         - RSI_DK: {latest['RSI_DK']:.1f}
-        위 데이터를 바탕으로 현재 시장 상황과 투자 전략(진입/관망/익절)을 딱 3줄로 명확하게 브리핑하세요.
+        위 데이터를 바탕으로 현재 시장 상황과 투자 전략을 딱 3줄로 명확하게 브리핑하세요.
         """
         
-        url = f"https://generativelanguage.googleapis.com/v1beta/{valid_model}:generateContent?key={GEMINI_API_KEY}"
+        # 최신 모델인 gemini-1.5-flash를 기본으로 사용합니다.
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         headers = {'Content-Type': 'application/json'}
-        data = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "safetySettings": [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-            ]
-        }
+        data = {"contents": [{"parts": [{"text": prompt}]}]}
         
         response = requests.post(url, headers=headers, json=data).json()
         
-        if 'candidates' in response and len(response['candidates']) > 0:
-            ai_text = response['candidates'][0]['content']['parts'][0]['text']
-            return f"(자동 선택된 모델: {valid_model})\n\n{ai_text}"
-        elif 'error' in response:
-            return f"🤖 서버가 거절했습니다. 사유: {response['error']['message']}"
+        if 'candidates' in response:
+            return response['candidates'][0]['content']['parts'][0]['text']
         else:
-            return f"🤖 알 수 없는 응답 구조입니다."
+            return "🤖 구글 API가 응답하지 않습니다. (키가 만료되었거나 정지되었을 수 있음)"
             
     except Exception as e:
-        return f"🤖 통신망 오류 발생: {str(e)}"
+        return f"🤖 브리핑 오류: {str(e)}"
 
-# 4. 지표 계산기 (Clean River v6)
-def add_indicators_v6(df, mtf_df=None):
+# 보조지표 계산 함수 (마누라님 전용 로직)
+def add_indicators_v6(df):
     rsiLen = 14
     df['lo'] = df['Low'].rolling(window=rsiLen).min()
     df['hi'] = df['High'].rolling(window=rsiLen).max()
@@ -100,14 +89,6 @@ def add_indicators_v6(df, mtf_df=None):
             curr = df['High'].iloc[i]
         fortress[i] = curr
     df['Fortress_Price'] = fortress
-    
-    if mtf_df is not None:
-        ema12_4 = mtf_df['Close'].ewm(span=12, adjust=False).mean()
-        ema26_4 = mtf_df['Close'].ewm(span=26, adjust=False).mean()
-        mtf_df['River_4H'] = (ema12_4 - ema26_4).ewm(span=5, adjust=False).mean()
-        mtf_df['is4hBull'] = (mtf_df['River_4H'] >= 0).astype(int)
-        mtf_merge = mtf_df[['Date', 'is4hBull']].rename(columns={'Date':'Date_4H', 'is4hBull':'Trend_4H'})
-        df = pd.merge_asof(df.sort_values('Date'), mtf_merge.sort_values('Date_4H'), left_on='Date', right_on='Date_4H', direction='backward')
     return df
 
 @st.cache_data(ttl=60)
@@ -115,59 +96,58 @@ def get_analysis_data(tf):
     ex = ccxt.kraken() 
     df = pd.DataFrame(ex.fetch_ohlcv('BTC/USDT', timeframe=tf, limit=200), columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
     df['Date'] = pd.to_datetime(df['Date'], unit='ms') + pd.Timedelta(hours=9)
+    df = add_indicators_v6(df)
+    df_c = df.dropna().copy()
     
-    df_4h = pd.DataFrame(ex.fetch_ohlcv('BTC/USDT', timeframe='4h', limit=100), columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
-    df_4h['Date'] = pd.to_datetime(df_4h['Date'], unit='ms') + pd.Timedelta(hours=9)
-    
-    df_4h = add_indicators_v6(df_4h)
-    df = add_indicators_v6(df, df_4h)
-    
-    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
-    features = ['RSI_DK', 'River_Slope', 'River_Accel']
-    df_c = df.dropna()
-    
-    model = RandomForestClassifier(n_estimators=50, random_state=42).fit(df_c[features], df_c['Target'])
-    prob = model.predict_proba(pd.DataFrame([df.iloc[-1][features]], columns=features))[0]
-    
-    return df, df.iloc[-1], prob[1]*100, prob[0]*100
+    lstm_model = load_ai_brain()
+    if lstm_model is not None:
+        features = ['Close', 'RSI_DK', 'River_Slope', 'River_Accel']
+        # 모델 학습시 사용했던 것과 동일한 스케일링 필요
+        data = df_c[features].values
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_data = scaler.fit_transform(data)
+        
+        time_steps = 10 
+        if len(scaled_data) >= time_steps:
+            latest_sequence = scaled_data[-time_steps:]
+            latest_sequence = np.expand_dims(latest_sequence, axis=0)
+            prob = lstm_model.predict(latest_sequence, verbose=0)[0][0]
+            up_prob = prob * 100
+            down_prob = (1 - prob) * 100
+        else:
+            up_prob, down_prob = 50.0, 50.0
+    else:
+        up_prob, down_prob = 50.0, 50.0
+        
+    return df, df_c.iloc[-1], up_prob, down_prob
 
-# 5. 메인 화면 UI
-st.title("🧲 AI 참모 v2.5 (Clean River v6)")
+# 메인 UI
+st.title("🧠 AI 참모 v3.0 (LSTM 딥러닝 탑재)")
 st.write("---")
 
 col1, col2, col3 = st.columns(3)
-tf_map = {"1시간": "1h", "4시간": "4h", "1일": "1d"}
 sel_tf = None
 if col1.button("🔄 1시간 분석"): sel_tf = "1h"
 if col2.button("🔄 4시간 분석"): sel_tf = "4h"
 if col3.button("🔄 1일 분석"): sel_tf = "1d"
 
 if sel_tf:
-    with st.spinner('차트를 스캔하고 AI 브리핑을 준비 중입니다...'):
+    with st.spinner('LSTM 딥러닝이 차트의 흐름을 분석 중입니다...'):
         df, latest, up, down = get_analysis_data(sel_tf)
         
         st.write("---")
-        
-        # 🕒 [신규 추가] 한국 시간(KST) 계산 및 표시
-        now_kst = datetime.utcnow() + timedelta(hours=9)
-        current_time_str = now_kst.strftime("%Y년 %m월 %d일 %H시 %M분 %S초")
-        st.caption(f"🕒 **업데이트 시간 (KST):** {current_time_str}")
-        
         m1, m2, m3 = st.columns(3)
         m1.metric("현재 BTC 가격", f"${latest['Close']:,.1f}")
-        m2.metric("상승 확률 (LONG)", f"{up:.1f}%")
-        m3.metric("하락 확률 (SHORT)", f"{down:.1f}%")
+        m2.metric("상승 확률", f"{up:.1f}%")
+        m3.metric("하락 확률", f"{down:.1f}%")
         
-        # AI 브리핑 출력부
         ai_msg = get_safe_ai_briefing(df, up, down)
-        st.info(f"🤖 **제미나이 AI 실시간 브리핑**\n\n{ai_msg}")
+        st.info(f"🤖 **실시간 브리핑**\n\n{ai_msg}")
         
         # 차트 그리기
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
-        fig.add_trace(go.Candlestick(x=df['Date'], open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='BTC', increasing_line_color='#00ffbb', decreasing_line_color='#ff0055'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['Fortress_Price'], line=dict(color='#ffaa00', width=2, shape='hv'), name='🧲 성벽 라인'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['RSI_DK'], name='RSI_DK', line=dict(color='#00e676')), row=2, col=1)
-        fig.add_hrect(y0=80, y1=100, fillcolor="rgba(0,128,0,0.1)", line_width=0, row=2, col=1)
-        fig.add_hrect(y0=0, y1=20, fillcolor="rgba(255,0,0,0.1)", line_width=0, row=2, col=1)
-        fig.update_layout(template='plotly_dark', xaxis_rangeslider_visible=False, height=600, margin=dict(l=20, r=20, t=30, b=20))
+        fig.add_trace(go.Candlestick(x=df['Date'], open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='BTC'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Fortress_Price'], line=dict(color='#ffaa00', width=2), name='성벽'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['RSI_DK'], name='RSI_DK'), row=2, col=1)
+        fig.update_layout(template='plotly_dark', xaxis_rangeslider_visible=False, height=600)
         st.plotly_chart(fig, use_container_width=True)
