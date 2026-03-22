@@ -2,6 +2,7 @@ streamlit
 ccxt
 pandas
 numpy
-scikit-learn
 plotly
 requests
+scikit-learn
+tensorflow-cpu
