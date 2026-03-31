@@ -1,154 +1,156 @@
+# 파일명: app.py (또는 main.py 등 회원님 깃허브에 덮어씌울 파이썬 파일)
+# 이 코드는 Streamlit이 아닌 [Flask 웹 브레인 서버]입니다!
 import os
-import streamlit as st
 import ccxt
+import requests
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import load_model
-from groq import Groq  # <-- 그록 참모 소환!
-
-# [설정] 이지패널 Environment 탭에 GROQ_API_KEY를 꼭 넣어주세요!
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-st.set_page_config(page_title="AI 참모 v3.0 (LSTM + Groq 엔진)", page_icon="🧠", layout="wide")
-
-# 폰트 및 스타일 설정
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Nanum+Gothic:wght@400;700&display=swap');
-    html, body, [data-testid="stSidebar"], p, h1, h2, h3, h4, div { font-family: 'Nanum Gothic', sans-serif !important; }
-    div[data-testid="stMetricValue"] { font-size: 2.5rem; font-weight: 700; color: #ff00ff; }
-</style>
-""", unsafe_allow_html=True)
-
-# 🧠 [신규] 딥러닝 모델 불러오기
-@st.cache_resource
-def load_ai_brain():
-    model_path = 'ai_trader_lstm.h5' # 깃허브에 이 파일이 있어야 합니다!
-    if os.path.exists(model_path):
-        try:
-            return load_model(model_path)
-        except Exception as e:
-            st.error(f"모델 로딩 실패: {e}")
-            return None
-    return None
-
-# 🤖 [수정] 구글 대신 그록(Groq)을 사용하는 브리핑 함수
-def get_safe_ai_briefing(df, up, down):
-    if not GROQ_API_KEY:
-        return "🤖 Groq API 키가 설정되지 않았습니다. 이지패널 Environment 설정을 확인하세요."
+from flask import Flask, request, jsonify, render_template_string
+from datetime import datetime
+import pytz
+app = Flask(__name__)
+# ==============================================================================
+# 🛠️ [1단계: 회원님 전용 매매 설정소 (여기를 입맛대로 고치세요!)]
+# ==============================================================================
+# 1. 거래소 세팅 (기본: 바이낸스 선물)
+# 업비트는 ccxt.upbit() 로 나중에 고치셔도 됩니다.
+exchange = ccxt.binance({
+    'apiKey': os.getenv("BINANCE_API_KEY", "여기에_바이낸스_API_키를_넣어주세요"),
+    'secret': os.getenv("BINANCE_SECRET_KEY", "여기에_바이낸스_시크릿키를_넣어주세요"),
+    'enableRateLimit': True,
+    'options': {
+        'defaultType': 'future' # 'spot'으로 바꾸면 현물, 'future'는 파생(선물)입니다.
+    }
+})
+# 2. 거래 자금 세팅 (1회 타점 진입 시 비율)
+TRADE_PERCENT_SIZE = 10  # 달러(USDT) 잔고의 몇 %를 베팅할 것인가? (기본 10%)
+# 3. 텔레그램 봇 및 제미나이(Groq) 키 연동
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "123456789:알파벳토큰번호")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "텔레그램채팅방숫자번호")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "제미나이_그록_API키_넣으세요")
+# ==============================================================================
+def send_telegram(message):
+    """텔레그램 스마트폰으로 톡을 쏘는 소음기 함수"""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
+    except Exception:
+        pass
+# ==============================================================================
+# 🎯 [2단계: 트레이딩뷰 직통 안테나 수신기 (Webhook 톨게이트)]
+# 파인스크립트 머리의 신호(LONG/SHORT)를 받아 CCXT 손발을 움직이는 핵심 심장부!!
+# ==============================================================================
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    # 트레이딩뷰에서 넘어오는 데이터(JSON) 받기
+    data = request.json
+    if not data or "action" not in data:
+        return jsonify({"error": "오류: 파인스크립트 신호가 아닙니다."}), 400
+    
+    action = data["action"].upper() # "LONG" 또는 "SHORT"
+    ticker = data.get("ticker", "BTC/USDT") # 기본값 비트코인
+    
+    # 신호가 포착되면 즉시 텔레파시 발동
+    send_telegram(f"🚨 [트레이딩뷰 v7.0 타점 포착!]\n명령: {action}\n종목: {ticker}\n전투 로봇 엔진 결제를 시작합니다.")
     
     try:
-        client = Groq(api_key=GROQ_API_KEY)
-        latest = df.iloc[-1]
+        # 1. 지갑 탈탈 털어서 달러(USDT) 잔고 확인
+        balance = exchange.fetch_balance()
+        usdt_balance = float(balance['info']['availableBalance']) if 'availableBalance' in balance['info'] else float(balance['USDT']['free'])
         
-        # 참모에게 전달할 데이터 정리
-        prompt = f"""
-        당신은 암호화폐 전문 분석가 'AI 참모'입니다.
-        - 현재 비트코인 가격: ${latest['Close']:,.1f}
-        - 딥러닝(LSTM) 예측: 상승 확률 {up:.1f}%, 하락 확률 {down:.1f}%
-        - RSI_DK: {latest['RSI_DK']:.1f}
-        위 데이터를 바탕으로 현재 시장 상황과 투자 전략을 딱 3줄로 명확하게 브리핑하세요.
-        """
+        # 2. 내가 정한 비중(TRADE_PERCENT_SIZE) 만큼 전투 자금 분할 (자금 관리)
+        trade_amount_usdt = usdt_balance * (TRADE_PERCENT_SIZE / 100.0)
         
-        # 그록의 가장 똑똑한 Llama 3.3 모델 사용 (속도가 예술입니다!)
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "너는 유능한 암호화폐 투자 전략가야. 한국어로 짧고 명확하게 핵심만 말해줘."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        return response.choices[0].message.content
-            
-    except Exception as e:
-        return f"🤖 그록 브리핑 오류: {str(e)}"
-
-# 보조지표 계산 함수 (마누라님 전용 로직)
-def add_indicators_v6(df):
-    rsiLen = 14
-    df['lo'] = df['Low'].rolling(window=rsiLen).min()
-    df['hi'] = df['High'].rolling(window=rsiLen).max()
-    denom = df['hi'] - df['lo']
-    df['RSI_DK'] = np.where(denom == 0, 50, (df['Close'] - df['lo']) / denom * 100)
-    
-    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-    df['River_Smoothed'] = (ema12 - ema26).ewm(span=5, adjust=False).mean()
-    df['River_Slope'] = df['River_Smoothed'].diff()
-    df['River_Accel'] = df['River_Slope'].diff()
-    
-    fortress = np.full(len(df), np.nan)
-    curr = np.nan
-    for i in range(1, len(df)):
-        if df['River_Slope'].iloc[i] < 0 and df['River_Accel'].iloc[i] > (abs(df['River_Slope'].iloc[i]) * 0.1):
-            curr = df['Low'].iloc[i]
-        elif df['River_Slope'].iloc[i] > 0 and df['River_Accel'].iloc[i] < -(abs(df['River_Slope'].iloc[i]) * 0.1):
-            curr = df['High'].iloc[i]
-        fortress[i] = curr
-    df['Fortress_Price'] = fortress
-    return df
-
-@st.cache_data(ttl=60)
-def get_analysis_data(tf):
-    ex = ccxt.kraken() 
-    df = pd.DataFrame(ex.fetch_ohlcv('BTC/USDT', timeframe=tf, limit=200), columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
-    df['Date'] = pd.to_datetime(df['Date'], unit='ms') + pd.Timedelta(hours=9)
-    df = add_indicators_v6(df)
-    df_c = df.dropna().copy()
-    
-    lstm_model = load_ai_brain()
-    if lstm_model is not None:
-        features = ['Close', 'RSI_DK', 'River_Slope', 'River_Accel']
-        data = df_c[features].values
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        scaled_data = scaler.fit_transform(data)
+        # 3. 현재 살 수 있는 코인 개수(Size) 정확히 계산
+        ticker_info = exchange.fetch_ticker(ticker)
+        current_price = ticker_info['last']
+        amount_to_buy = trade_amount_usdt / current_price
         
-        time_steps = 10 
-        if len(scaled_data) >= time_steps:
-            latest_sequence = scaled_data[-time_steps:]
-            latest_sequence = np.expand_dims(latest_sequence, axis=0)
-            prob = lstm_model.predict(latest_sequence, verbose=0)[0][0]
-            up_prob = prob * 100
-            down_prob = (1 - prob) * 100
+        # 4. 🔥 실전 결제 타격 개시! (시장가 진입) 🔥
+        if action == "LONG":
+            order = exchange.create_market_buy_order(ticker, amount_to_buy)
+        elif action == "SHORT":
+            order = exchange.create_market_sell_order(ticker, amount_to_buy)
         else:
-            up_prob, down_prob = 50.0, 50.0
-    else:
-        up_prob, down_prob = 50.0, 50.0
+            return jsonify({"error": "알 수 없는 명령"}), 400
+            
+        # 성공하면 텔레그램으로 승전보 알림
+        msg = f"✅ [진입 성.공.적.] {action}\n체결가: ${current_price:,.2f}\n투입량: {amount_to_buy:.4f} 코인\n(가자아아!! 🚀)"
+        send_telegram(msg)
+        return jsonify({"status": "Success", "message": msg}), 200
         
-    return df, df_c.iloc[-1], up_prob, down_prob
-
-# 메인 UI
-st.title("🧠 AI 참모 v3.0 (LSTM + Groq 엔진)")
-st.write("---")
-
-col1, col2, col3 = st.columns(3)
-sel_tf = None
-if col1.button("🔄 1시간 분석"): sel_tf = "1h"
-if col2.button("🔄 4시간 분석"): sel_tf = "4h"
-if col3.button("🔄 1일 분석"): sel_tf = "1d"
-
-if sel_tf:
-    with st.spinner('LSTM 딥러닝과 Groq 참모가 차트를 분석 중입니다...'):
-        df, latest, up, down = get_analysis_data(sel_tf)
-        
-        st.write("---")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("현재 BTC 가격", f"${latest['Close']:,.1f}")
-        m2.metric("상승 확률", f"{up:.1f}%")
-        m3.metric("하락 확률", f"{down:.1f}%")
-        
-        # [실행] 그록 브리핑 호출!
-        ai_msg = get_safe_ai_briefing(df, up, down)
-        st.info(f"🤖 **실시간 브리핑 (Powered by Groq)**\n\n{ai_msg}")
-        
-        # 차트 그리기
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
-        fig.add_trace(go.Candlestick(x=df['Date'], open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='BTC'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['Fortress_Price'], line=dict(color='#ffaa00', width=2), name='성벽'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['RSI_DK'], name='RSI_DK'), row=2, col=1)
-        fig.update_layout(template='plotly_dark', xaxis_rangeslider_visible=False, height=600)
-        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        # 돈이 부족하거나 거래소 점검 등 에러가 나면 텔레그램에 바로 빨간 보고
+        error_msg = f"❌ [주문 실패 비상!]\n이유: {str(e)}"
+        send_telegram(error_msg)
+        return jsonify({"error": str(e)}), 500
+# ==============================================================================
+# 📊 [3단계: 스마트폰으로 언제든 볼 수 있는 봇 통제실 (Dashboard)]
+# 아까 쓰시던 '머신러닝.txt'의 예쁜 관상용 브리핑 화면을 이곳으로 옮겼습니다.
+# ==============================================================================
+@app.route("/")
+def dashboard():
+    kst = pytz.timezone('Asia/Seoul')
+    now = datetime.now(kst).strftime('%Y-%m-%d %H:%M:%S')
+    
+    current_price = "조회 중..."
+    try:
+        ticker_info = exchange.fetch_ticker('BTC/USDT')
+        current_price = f"${ticker_info['last']:,.2f}"
+    except Exception:
+        pass
+    
+    # 제미나이(Groq) 참모의 초스피드 전황 보고
+    ai_briefing = "AI 참모가 전쟁터 데이터를 분석 중입니다..."
+    if GROQ_API_KEY:
+        try:
+            from groq import Groq
+            client = Groq(api_key=GROQ_API_KEY)
+            prompt = f"현재 BTC 가격: {current_price}. 너는 최고 베테랑 비트코인 참모다. 전황을 2문장으로 보고해라."
+            comp = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
+            ai_briefing = comp.choices[0].message.content
+        except Exception as e:
+            ai_briefing = f"참모 통신 두절 (원인: {str(e)})"
+    
+    # 딥 다크한 프로그래머용 무반사 스텔스 대시보드 화면 생성기
+    html = f"""
+    <html>
+    <head>
+        <title>🤖 리버 시스템 자동매매 통제실 (v5.0)</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body {{ background-color: #0b0c10; color: #66fcf1; font-family: 'Malgun Gothic', Arial, sans-serif; padding: 30px; line-height: 1.6; margin: 0; }}
+            .container {{ max-width: 800px; margin: 0 auto; }}
+            .box {{ background-color: #1f2833; padding: 25px; border-radius: 12px; border-left: 6px solid #45a29e; margin-bottom: 25px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }}
+            h1 {{ color: #ffffff; font-size: 24px; border-bottom: 1px solid #45a29e; padding-bottom: 10px; }}
+            .highlight {{ color: #ffffff; font-weight: bold; font-size: 22px; }}
+            .webhook-url {{ background-color: #000; padding: 10px; border-radius: 5px; color: #ff007f; font-family: monospace; font-size: 16px; margin-top: 10px; display: inline-block; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🚀 River System 100% 자동 결제 봇 (v5.0) 가동 중</h1>
+            <div class="box">
+                <p>💰 현재 비트코인(BTC) 레이더 가격: <span class="highlight">{current_price}</span></p>
+                <p>🕒 서버 기준 시간 (KST): {now}</p>
+                <p>🎯 매매 진입 비중 세팅: 지갑의 {TRADE_PERCENT_SIZE}% 자동 타격 설정됨</p>
+            </div>
+            
+            <div class="box">
+                <h3 style="color:#ffffff;">💬 6성급 AI 참모 (Llama-3 기반) 브리핑</h3>
+                <p>{ai_briefing}</p>
+            </div>
+            
+            <div class="box" style="border-left-color: #ff007f;">
+                <h3 style="color:#ffffff;">🚨 트레이딩뷰 텔레파시 수신 안테나 주소 (Webhook)</h3>
+                <p>트레이딩뷰 알림의 웹훅 URL 칸에 이 방의 주소를 꽂아주세요.</p>
+                <div class="webhook-url">http://회원님-이지패널-도메인.com/webhook</div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return render_template_string(html)
+if __name__ == "__main__":
+    # 포트 3000번으로 문을 활짝 엽니다. 이지패널 기본 포트와 완벽하게 호환됩니다.
+    app.run(host="0.0.0.0", port=3000)
